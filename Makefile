@@ -2,8 +2,9 @@ BUILDDIR='.build'
 PYTHONPATH:=${PWD}/tests/:${PWD}:${PYTHONPATH}
 BUILDDIR?=./.build
 CURRENT_BRANCH:=$(shell git rev-parse --abbrev-ref HEAD)
-.PHONY: help runonce run i18n
+.PHONY: help runonce run i18n docs-serve
 .DEFAULT_GOAL := help
+DOCS_PORT?=8001
 CORES?=$(shell (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1) | awk '{ v = int($$1 * 0.75); print (v < 1 ? 1 : v) }')
 
 ifeq ($(wildcard .python-version),)
@@ -53,3 +54,6 @@ help:
 outdated:  ## Generates .outdated.txt and .tree.txt files
 	uv tree > .tree.txt
 	uv pip list --outdated > .outdated.txt
+
+docs-serve:  ## Build and serve the docs on localhost:$DOCS_PORT (default 8001)
+	uv run --group docs zensical serve --dev-addr localhost:$(DOCS_PORT)
