@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from taiga_cli.api.client import TaigaClient
-from taiga_cli.errors import NotFoundError, UsageError
+from taiga_cli.errors import NotFoundError, UsageError, VersionConflictError
 
 _REF = re.compile(r"^(?:(?P<slug>[a-z0-9][a-z0-9_-]*)?#)?(?P<ref>\d+)$", re.IGNORECASE)
 
@@ -64,3 +64,40 @@ class Resource:
 
     def update(self, client: TaigaClient, item_id: int, data: dict[str, Any]) -> dict[str, Any]:
         return client.patch(f"{self.endpoint}/{item_id}", data)
+
+    def create(self, client: TaigaClient, data: dict[str, Any]) -> dict[str, Any]:
+        return client.request("POST", self.endpoint, json=data).json()
+
+    def find_open_by_subject(
+        self, client: TaigaClient, project_id: int, subject: str
+    ) -> dict[str, Any] | None:
+        """Open item whose subject equals ``subject`` (ignoring surrounding whitespace)."""
+        candidates = client.get(
+            self.endpoint,
+            # `q` is Taiga's text search: it narrows the candidates, the match is exact below.
+            params={"project": project_id, "status__is_closed": "false", "q": subject},
+            headers={"x-disable-pagination": "True"},
+        )
+        wanted = subject.strip()
+        matches = [
+            i
+            for i in candidates
+            if (i.get("subject") or "").strip() == wanted and not i.get("is_closed")
+        ]
+        return min(matches, key=lambda i: i["ref"]) if matches else None
+
+    def set_custom_values(self, client: TaigaClient, item_id: int, values: dict[str, Any]) -> None:
+        """Merge ``{attribute id: value}`` into the item's custom-field values."""
+        path = f"{self.endpoint}/custom-attributes-values/{item_id}"
+        for attempt in (1, 2):
+            current = client.get(path)
+            body = {
+                "attributes_values": {**(current.get("attributes_values") or {}), **values},
+                "version": current["version"],
+            }
+            try:
+                client.patch(path, body)
+                return
+            except VersionConflictError:
+                if attempt == 2:
+                    raise

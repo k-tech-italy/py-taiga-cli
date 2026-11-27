@@ -23,5 +23,5 @@ pytest                      # tests
 ruff check --fix .          # lint
 ruff format .               # format
 tox                         # everything CI runs: lint, tests on 3.11-3.14, docs build
-zensical serve              # preview docs (uv sync --group docs first)
+make docs-serve              # build + serve docs on localhost:$DOCS_PORT (default 8001)
 ```

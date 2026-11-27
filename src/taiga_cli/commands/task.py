@@ -6,12 +6,16 @@ import click
 
 from taiga_cli.api import stories, tasks
 from taiga_cli.api.items import parse_ref
+from taiga_cli.api.project_context import ProjectContext
 from taiga_cli.commands._items import (
+    ItemCreate,
     ItemUpdate,
+    common_create_options,
     common_filter_options,
     common_filter_params,
     common_update_options,
     project_option,
+    run_create,
     run_update,
 )
 from taiga_cli.context import AppContext, pass_app
@@ -103,3 +107,55 @@ def update(
     """
     change = ItemUpdate(subject, status, assignee, add_tag, remove_tag, description, comment)
     run_update(app, tasks.RESOURCE, ref, project, change, raw=raw)
+
+
+@task.command("create")
+@common_create_options("task")
+@click.option("--story", "story_ref", metavar="REF", help="Attach to a user story (42 or SLUG#42).")
+@click.option("--sprint", metavar="NAME", help="Sprint name/slug [default: the story's sprint].")
+@pass_app
+def create(
+    app: AppContext,
+    subject: str,
+    project: str | None,
+    description: str | None,
+    status: str | None,
+    assignee: str | None,
+    tags: tuple[str, ...],
+    custom: tuple[str, ...],
+    if_absent: bool,
+    as_json: bool,
+    story_ref: str | None,
+    sprint: str | None,
+) -> None:
+    """Create a task; prints `created: SLUG#REF`.
+
+    Example: `taiga-cli task create --subject "Write tests" --story 42`
+    """
+    item = ItemCreate(subject, description, status, assignee, tags, custom)
+    if story_ref:
+        story_slug, story_number = parse_ref(story_ref, project)  # rejects a conflicting -P
+        project = story_slug or project
+        parent: dict[str, dict] = {}
+
+        def story(pctx: ProjectContext) -> dict:
+            if "item" not in parent:  # one lookup shared by user_story and milestone
+                parent["item"] = stories.RESOURCE.get_by_ref(
+                    app.client(), pctx.id, story_number, pctx.slug
+                )
+            return parent["item"]
+
+        item.extra["user_story"] = lambda pctx: story(pctx)["id"]
+        if not sprint:
+            item.extra["milestone"] = lambda pctx: story(pctx).get("milestone")
+    if sprint:
+        item.extra["milestone"] = lambda pctx: pctx.milestone_id(sprint)
+    run_create(
+        app,
+        tasks.RESOURCE,
+        project,
+        item,
+        if_absent=if_absent,
+        as_json=as_json,
+        normalizer=lambda _pctx: tasks.normalize,
+    )

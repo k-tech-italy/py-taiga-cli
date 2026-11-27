@@ -1,6 +1,6 @@
 ---
 name: taiga-cli
-description: Read and update Taiga projects, epics, user stories, tasks and issues from the shell with the token-efficient `taiga-cli` command. Use when the user mentions Taiga, user stories, tasks, issues, epics or sprints in Taiga.
+description: Read, create and update Taiga epics, user stories, tasks and issues from the shell with the token-efficient `taiga-cli` command. Use when the user mentions Taiga, user stories, tasks, issues, epics or sprints in Taiga.
 ---
 
 # taiga-cli
@@ -33,6 +33,14 @@ the valid ones.
   Filters: `--status`, `--assignee`, `--tag`, `--state`.
 - `taiga-cli epic update SLUG#REF ...` — task update options plus `--color HEX`,
   `--add-story REF` / `--remove-story REF` (repeatable, idempotent; link/unlink user stories).
+
+- `taiga-cli story create --subject TEXT ...` (also `task`, `issue`, `epic`) — prints
+  `created: SLUG#REF`. Options: `--description TEXT|-`, `--status`, `--assignee`, `--tag T`,
+  `--custom NAME=VALUE` (repeatable); story: `--sprint`, `--epic REF` (repeatable); task:
+  `--story REF`; issue: `--type`, `--priority`, `--severity`, `--sprint`; epic: `--color`.
+  Unset fields use the project defaults. Add `--if-absent` when creating in bulk or retrying:
+  it prints `exists: SLUG#REF` instead of creating a duplicate. If stdout says `created:` and
+  the command still fails, the item exists: don't create it again, fix the reported step.
 
 Refs: write `web#42` or `42 -P web`. Never a bare `#42`: the shell treats it as a comment.
 

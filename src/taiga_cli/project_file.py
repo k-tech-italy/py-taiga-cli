@@ -31,6 +31,15 @@ class ProjectConfig:
         """A top-level value list: "issue_types", "priorities", "severities", "points"."""
         return self.data.get(kind) or []
 
+    def custom_fields(self, kind: str) -> list[dict[str, Any]]:
+        """Custom-field definitions of ``kind`` ("userstory", "task", "issue", "epic")."""
+        return (self.data.get("custom_fields") or {}).get(kind) or []
+
+    def default_id(self, key: str) -> int | None:
+        """Id of a project default, e.g. "userstory_status", "priority" (None if unset)."""
+        entry = (self.data.get("defaults") or {}).get(key)
+        return entry.get("id") if isinstance(entry, dict) else None
+
     def statuses(self, kind: str) -> list[dict[str, Any]]:
         """Statuses of ``kind`` ("userstory", "task", "issue", "epic")."""
         return (self.data.get("statuses") or {}).get(kind) or []

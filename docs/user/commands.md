@@ -25,6 +25,63 @@ Fields: `id`, `slug`, `name`, `description`, `is_private` (default `slug,name`).
 |-----------------------------------------------|------------------------------------------|
 | `taiga-cli project configure export URL`      | write `.taiga-cli-config.json` from the project's admin settings; see [Project config file](project-config.md) |
 
+## Creating items
+
+`story`, `task`, `issue` and `epic` each have a `create` subcommand:
+
+```console
+$ taiga-cli story create --subject "Login page" --status Ready --tag auth --epic 3
+created: web#45
+$ taiga-cli task create --subject "Write tests" --story web#45
+created: web#46
+```
+
+Common options:
+
+| Option                 | Effect                                                         |
+|------------------------|----------------------------------------------------------------|
+| `--subject TEXT`       | title (**required**)                                           |
+| `--description TEXT\|-`| description; `-` reads stdin                                   |
+| `--status NAME`        | status by name                                                 |
+| `--assignee USER`      | username, full name or `me`                                    |
+| `--tag T`              | tag (repeatable)                                               |
+| `--custom NAME=VALUE`  | custom field by name (repeatable), e.g. `--custom Priority=2`  |
+| `--if-absent`          | don't create if an **open** item of the same type has exactly this subject (surrounding spaces ignored); prints `exists: SLUG#REF` |
+| `--json`               | print the item's fields (as in `list --json`, all fields) plus `"created": true\|false` |
+| `-P SLUG`              | project [default: from the project config file]               |
+
+Item-specific options:
+
+| Command          | Options                                                                   |
+|------------------|---------------------------------------------------------------------------|
+| `story create`   | `--sprint NAME\|backlog`, `--epic REF` (repeatable): link the story to epics |
+| `task create`    | `--story REF`: attach to a story; the task joins the story's sprint unless `--sprint NAME` is given |
+| `issue create`   | `--type`, `--priority`, `--severity` (by name), `--sprint NAME\|backlog`    |
+| `epic create`    | `--color HEX`                                                             |
+
+Options that aren't given fall back to the project defaults in
+[`.taiga-cli-config.json`](project-config.md) (status, and type/priority/severity for
+issues); without the file Taiga applies the project's own defaults.
+
+Custom-field values are checked against the field type: numbers, `true`/`false` for
+checkboxes, `YYYY-MM-DD` for dates, and one of the options for dropdowns (case-insensitive).
+
+**Everything is validated before anything is written:** an unknown name (exit 2, with the
+valid names listed), a bad custom value (exit 2) or a missing epic/story (exit 4) creates
+nothing. Linking to epics and setting custom fields happen right after the item is created;
+if one of those steps fails, the command still prints `created: SLUG#REF` on stdout, then
+the error on stderr (`error: web#45 was created, but linking to epic web#3 failed: ...`) with
+that step's exit code, so the item is never created twice by a blind retry.
+
+For agents creating many items, `--if-absent` makes re-running safe:
+
+```console
+$ taiga-cli issue create --subject "Crash on login" --type Bug --if-absent
+created: web#47
+$ taiga-cli issue create --subject "Crash on login" --type Bug --if-absent
+exists: web#47
+```
+
 ## story
 
 ### Referring to stories

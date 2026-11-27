@@ -21,6 +21,14 @@ BACKLOG = "backlog"
 # project value lists (same key in the config file and the API payload) -> label for messages
 VALUE_KINDS = {"issue_types": "type", "priorities": "priority", "severities": "severity"}
 
+# item kind -> custom-field definitions: key in /projects/by_slug, fallback endpoint
+_CUSTOM_FIELDS = {
+    "userstory": ("userstory_custom_attributes", "/userstory-custom-attributes"),
+    "task": ("task_custom_attributes", "/task-custom-attributes"),
+    "issue": ("issue_custom_attributes", "/issue-custom-attributes"),
+    "epic": ("epic_custom_attributes", "/epic-custom-attributes"),
+}
+
 # status kind -> key in the /projects/by_slug payload
 _STATUS_KEYS = {
     "userstory": "us_statuses",
@@ -133,6 +141,29 @@ class ProjectContext:
         if not items:
             items = self.raw.get(kind, [])
         return {i["id"]: i.get("name") for i in items}
+
+    # -- defaults & custom fields ----------------------------------------------
+    def default_id(self, key: str) -> int | None:
+        """A project default from the config file (e.g. "userstory_status"), if it covers us.
+
+        Without one the field is simply omitted and Taiga applies the project default itself.
+        """
+        return self._file.default_id(key) if self._file is not None else None
+
+    def custom_field(self, kind: str, name: str) -> dict[str, Any]:
+        """Custom-field definition by name: config file first, then the server."""
+        keys = ("name",)
+        if self._raw is None and self._file is not None:
+            found = _find(name, self._file.custom_fields(kind), keys)
+            if found is not None:
+                return found
+        raw_key, endpoint = _CUSTOM_FIELDS[kind]
+        fields = self.raw.get(raw_key)
+        if fields is None:
+            fields = self._client.get(
+                endpoint, params={"project": self.id}, headers={"x-disable-pagination": "True"}
+            )
+        return _match("custom field", name, fields, *keys)
 
     # -- users ---------------------------------------------------------------
     def user_id(self, name: str, me: Callable[[], int]) -> int:
