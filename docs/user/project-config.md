@@ -20,6 +20,10 @@ so it works from anywhere inside the repository. The closest file wins.
   example `story list --status "In progress"` needs a single API call. If a status isn't in
   the file (it may be out of date), the CLI asks the server before failing.
 
+- **Defaults for new items:** `create` commands fill in fields that aren't given from
+  `defaults` (status; type, priority and severity for issues), and resolve
+  `--custom NAME=VALUE` against `custom_fields`.
+
 Command-line options always win: `-P` picks another project, `-p` another profile, and
 `--no-project-config` (before the subcommand) ignores the file entirely.
 

@@ -118,7 +118,9 @@ This is the core requirement — treat it as a public API and cover it with test
 - Errors go to stderr as a single line; use distinct, documented exit codes
   (e.g. 0 ok, 1 generic, 2 usage, 3 auth, 4 not found).
 - `--help` text is concise; put long explanations in `docs/`, not in help strings.
-- Write commands (create/update/delete) print only the ref and a short confirmation.
+- Write commands (create/update/delete) print only the ref and a short confirmation
+  (`created: SLUG#REF`, `ok: SLUG#REF`). Validate every input before the first write; if a
+  step after a create fails, still print the created ref before the error.
   Handle Taiga's `version` (optimistic locking) internally.
   Destructive commands require `--yes` when not interactive.
 

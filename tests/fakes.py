@@ -32,6 +32,17 @@ PROJECT = {
     "issue_types": [{"id": 50, "name": "Bug"}, {"id": 51, "name": "Enhancement"}],
     "priorities": [{"id": 60, "name": "Low"}, {"id": 61, "name": "High"}],
     "severities": [{"id": 70, "name": "Minor"}, {"id": 71, "name": "Critical"}],
+    "userstory_custom_attributes": [
+        {"id": 90, "name": "Priority", "type": "number"},
+        {"id": 91, "name": "Customer", "type": "dropdown", "extra": ["ACME", "Globex"]},
+        {"id": 92, "name": "Billable", "type": "checkbox"},
+        {"id": 93, "name": "Due", "type": "date"},
+    ],
+    "task_custom_attributes": [{"id": 95, "name": "Estimate", "type": "number"}],
+    "issue_custom_attributes": [{"id": 96, "name": "Browser", "type": "text"}],
+    "epic_custom_attributes": [
+        {"id": 97, "name": "Quarter", "type": "dropdown", "extra": ["Q1", "Q2", "Q3", "Q4"]}
+    ],
     "members": [
         {"id": 7, "username": "alice", "full_name": "Alice A", "full_name_display": "Alice A"},
         {"id": 8, "username": "bob", "full_name": "Bob B", "full_name_display": "Bob B"},
@@ -133,6 +144,11 @@ class FakeTaiga:
         # epic id -> linked user story ids
         self.epic_links: dict[int, list[int]] = {403: [102]}
         self.patch_responses: list[httpx.Response] = []
+        # (method, path without /api/v1) -> canned response, to simulate failures
+        self.failures: dict[tuple[str, str], httpx.Response] = {}
+        self.next_ref = 100  # refs are shared by every item type of a project, as in Taiga
+        # ".../custom-attributes-values/<id>" -> {"attributes_values": {...}, "version": n}
+        self.custom_values: dict[str, dict[str, Any]] = {}
 
     def last(self, method: str, path: str) -> httpx.Request:
         return [r for r in self.requests if r.method == method and r.url.path == path][-1]
@@ -140,6 +156,10 @@ class FakeTaiga:
     def __call__(self, req: httpx.Request) -> httpx.Response:
         self.requests.append(req)
         path = req.url.path.removeprefix("/api/v1")
+        if (req.method, path) in self.failures:
+            return self.failures[(req.method, path)]
+        if "/custom-attributes-values/" in path:
+            return self._custom_values(req, path)
         if path == "/projects/by_slug":
             projects = {self.project["slug"]: self.project, **self.other_projects}
             found = projects.get(req.url.params["slug"])
@@ -170,6 +190,8 @@ class FakeTaiga:
         ):
             if path == prefix and req.method == "GET":
                 return httpx.Response(200, json=items)
+            if path == prefix and req.method == "POST":
+                return self._create(json.loads(req.content), items, make, prefix)
             if path == f"{prefix}/by_ref":
                 ref = int(req.url.params["ref"])
                 found = [i for i in items if i["ref"] == ref]
@@ -201,4 +223,45 @@ class FakeTaiga:
         if req.method == "DELETE":
             links.remove(int(parts[3]))
             return httpx.Response(204)
+        return httpx.Response(405)
+
+    def _create(self, body: dict[str, Any], items: list, make: Any, prefix: str) -> httpx.Response:
+        assert body.pop("project") == self.project["id"]
+        ref, self.next_ref = self.next_ref, self.next_ref + 1
+        statuses = {
+            "/userstories": "us_statuses",
+            "/tasks": "task_statuses",
+            "/issues": "issue_statuses",
+            "/epics": "epic_statuses",
+        }[prefix]
+        status = next((s for s in self.project[statuses] if s["id"] == body.get("status")), None)
+        member = next(
+            (m for m in self.project["members"] if m["id"] == body.get("assigned_to")), None
+        )
+        extra: dict[str, Any] = {
+            "status_extra_info": {"name": status["name"]} if status else None,
+            "assigned_to_extra_info": {"username": member["username"]} if member else None,
+            "tags": body.get("tags", []),
+            "version": 1,
+        }
+        if prefix == "/tasks":
+            parent = next((s for s in self.stories if s["id"] == body.get("user_story")), None)
+            extra["user_story_extra_info"] = {"ref": parent["ref"]} if parent else None
+        if prefix == "/userstories":
+            extra["epics"] = []
+        item = make(ref, **{**extra, **body})
+        items.append(item)
+        return httpx.Response(201, json=item)
+
+    def _custom_values(self, req: httpx.Request, path: str) -> httpx.Response:
+        current = self.custom_values.setdefault(path, {"attributes_values": {}, "version": 1})
+        if req.method == "GET":
+            return httpx.Response(200, json=current)
+        if req.method == "PATCH":
+            body = json.loads(req.content)
+            if body["version"] != current["version"]:
+                return httpx.Response(400, json={"version": "doesn't match"})
+            current["attributes_values"] = body["attributes_values"]
+            current["version"] += 1
+            return httpx.Response(200, json=current)
         return httpx.Response(405)

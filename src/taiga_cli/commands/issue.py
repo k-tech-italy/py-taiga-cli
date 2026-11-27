@@ -8,12 +8,16 @@ from typing import Any
 import click
 
 from taiga_cli.api import issues
+from taiga_cli.api.project_context import ProjectContext
 from taiga_cli.commands._items import (
+    ItemCreate,
     ItemUpdate,
+    common_create_options,
     common_filter_options,
     common_filter_params,
     common_update_options,
     project_option,
+    run_create,
     run_update,
 )
 from taiga_cli.context import AppContext, pass_app
@@ -133,3 +137,55 @@ def update(
     if sprint:
         change.extra["milestone"] = lambda pctx: pctx.milestone_id(sprint)
     run_update(app, issues.RESOURCE, ref, project, change, raw=raw)
+
+
+@issue.command("create")
+@common_create_options("issue")
+@_value_options(plural=False)
+@click.option("--sprint", metavar="NAME", help="Sprint name/slug, or 'backlog'.")
+@pass_app
+def create(
+    app: AppContext,
+    subject: str,
+    project: str | None,
+    description: str | None,
+    status: str | None,
+    assignee: str | None,
+    tags: tuple[str, ...],
+    custom: tuple[str, ...],
+    if_absent: bool,
+    as_json: bool,
+    type_: str | None,
+    priority: str | None,
+    severity: str | None,
+    sprint: str | None,
+) -> None:
+    """Create an issue; prints `created: SLUG#REF`.
+
+    Example: `taiga-cli issue create --subject "Crash on login" --type Bug --priority High`
+    """
+    item = ItemCreate(subject, description, status, assignee, tags, custom)
+    item.defaults = {"type": "issue_type", "priority": "priority", "severity": "severity"}
+    for field_name, name, kind in (
+        ("type", type_, "issue_types"),
+        ("priority", priority, "priorities"),
+        ("severity", severity, "severities"),
+    ):
+        if name:
+            item.extra[field_name] = lambda pctx, kind=kind, name=name: pctx.value_id(kind, name)
+    if sprint:
+        item.extra["milestone"] = lambda pctx: pctx.milestone_id(sprint)
+
+    def normalizer(pctx: ProjectContext) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        kinds = issues.VALUE_FIELDS.values()
+        return issues.make_normalizer({kind: pctx.value_names(kind) for kind in kinds})
+
+    run_create(
+        app,
+        issues.RESOURCE,
+        project,
+        item,
+        if_absent=if_absent,
+        as_json=as_json,
+        normalizer=normalizer,
+    )

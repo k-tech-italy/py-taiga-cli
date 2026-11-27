@@ -1,4 +1,4 @@
-"""Options and update logic shared by ref-addressed item commands (story, task, ...)."""
+"""Options and create/update logic shared by ref-addressed item commands (story, task, ...)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from typing import Any, Protocol
 import click
 
 from taiga_cli.api.client import TaigaClient
+from taiga_cli.api.custom_fields import convert, parse_assignments
 from taiga_cli.api.items import Resource, parse_ref, tag_names
 from taiga_cli.api.project_context import ProjectContext
 from taiga_cli.context import AppContext
-from taiga_cli.errors import UsageError, VersionConflictError
+from taiga_cli.errors import TaigaCliError, UsageError, VersionConflictError
 from taiga_cli.output import dump_json
+
+Normalizer = Callable[[dict[str, Any]], dict[str, Any]]
 
 project_option = click.option(
     "-P", "--project", metavar="SLUG", help="Project slug [default: from project config file]."
@@ -201,3 +204,157 @@ def _patch_with_retry(
             if attempt == 2:
                 raise
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+# -- create --------------------------------------------------------------------
+
+
+def common_create_options(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """-P, --subject and the options every item's ``create`` supports."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        options = [  # applied bottom-up: --subject is listed first in --help
+            click.option("--json", "as_json", is_flag=True, help=f"Print the {name}'s fields."),
+            click.option(
+                "--if-absent",
+                is_flag=True,
+                help=f"Don't create if an open {name} has exactly this subject.",
+            ),
+            click.option(
+                "--custom",
+                multiple=True,
+                metavar="NAME=VALUE",
+                help="Set a custom field (repeatable).",
+            ),
+            click.option("--tag", "tags", multiple=True, metavar="TAG", help="Tag (repeatable)."),
+            click.option("--assignee", metavar="USER", help="Username, full name or 'me'."),
+            click.option("--status", metavar="NAME", help="Status name [default: project's]."),
+            click.option("--description", metavar="TEXT", help="Description; '-' reads stdin."),
+            project_option,
+            click.option("--subject", required=True, help="Title."),
+        ]
+        for option in options:
+            func = option(func)
+        return func
+
+    return decorator
+
+
+def step_failed(step: str, exc: TaigaCliError) -> TaigaCliError:
+    """Re-label an error from a post-create step, keeping its exit code."""
+    err = TaigaCliError(f"{step} failed: {exc.format_message()}")
+    err.exit_code = exc.exit_code
+    return err
+
+
+class CustomValues:
+    """``--custom NAME=VALUE``: validated before the item exists, saved right after."""
+
+    def __init__(self, resource: Resource, assignments: dict[str, str]) -> None:
+        self._resource = resource
+        self._assignments = assignments
+        self._values: dict[str, Any] = {}
+
+    def prepare(self, app: AppContext, pctx: ProjectContext) -> None:
+        for name, value in self._assignments.items():
+            definition = pctx.custom_field(self._resource.status_kind, name)
+            self._values[str(definition["id"])] = convert(definition, value)
+
+    def apply(self, client: TaigaClient, item: dict[str, Any]) -> None:
+        try:
+            self._resource.set_custom_values(client, item["id"], self._values)
+        except TaigaCliError as exc:
+            raise step_failed("setting custom fields", exc) from exc
+
+
+@dataclass
+class ItemCreate:
+    """A new item as requested on the command line, before name resolution."""
+
+    subject: str
+    description: str | None = None
+    status: str | None = None
+    assignee: str | None = None
+    tags: tuple[str, ...] = ()
+    custom: tuple[str, ...] = ()
+    # Item-specific body fields, resolved before anything is written; None means "omit".
+    extra: dict[str, Callable[[ProjectContext], Any]] = field(default_factory=dict)
+    # Body field -> project default (config file) used when the field isn't given.
+    defaults: dict[str, str] = field(default_factory=dict)
+    # Steps that need the created item (e.g. epic links); validated in prepare().
+    side_effects: list[SideEffect] = field(default_factory=list)
+
+
+def run_create(
+    app: AppContext,
+    resource: Resource,
+    project: str | None,
+    create: ItemCreate,
+    *,
+    if_absent: bool,
+    as_json: bool,
+    normalizer: Callable[[ProjectContext], Normalizer],
+) -> None:
+    """Validate everything, create the item, then run post-create steps.
+
+    Prints ``created: SLUG#REF`` (or ``exists: SLUG#REF`` with --if-absent). If a step after
+    the creation fails, the created ref is printed before the error so it is never lost.
+    """
+    if not create.subject.strip():
+        raise UsageError("--subject must not be empty")
+    if create.description == "-":
+        create.description = sys.stdin.read()
+    custom = parse_assignments(create.custom)  # syntax errors before any request
+
+    slug = app.project_slug(project)
+    client = app.client()
+    pctx = app.project_context(slug)
+    kind = resource.status_kind
+
+    body: dict[str, Any] = {"project": pctx.id, "subject": create.subject}
+    if create.description is not None:
+        body["description"] = create.description
+    if create.status:
+        body["status"] = pctx.status_id(kind, create.status)
+    if create.assignee and create.assignee.strip().casefold() != "none":
+        body["assigned_to"] = pctx.user_id(create.assignee, app.me_id)
+    if create.tags:
+        body["tags"] = list(dict.fromkeys(create.tags))
+    for key, resolve in create.extra.items():
+        value = resolve(pctx)
+        if value is not None:
+            body[key] = value
+    for key, default_key in {"status": f"{kind}_status", **create.defaults}.items():
+        default = pctx.default_id(default_key) if key not in body else None
+        if default is not None:
+            body[key] = default
+    effects: list[SideEffect] = list(create.side_effects)
+    if custom:
+        effects.insert(0, CustomValues(resource, custom))
+    for effect in effects:
+        effect.prepare(app, pctx)
+
+    def emit(item: dict[str, Any], created: bool) -> None:
+        if as_json:
+            click.echo(dump_json({**normalizer(pctx)(item), "created": created}))
+        else:
+            click.echo(f"{'created' if created else 'exists'}: {slug}#{item['ref']}")
+
+    if if_absent:
+        existing = resource.find_open_by_subject(client, pctx.id, create.subject)
+        if existing is not None:
+            emit(existing, created=False)
+            return
+
+    item = resource.create(client, body)
+    for effect in effects:
+        try:
+            effect.apply(client, item)
+        except TaigaCliError as exc:
+            emit(item, created=True)
+            err = TaigaCliError(f"{slug}#{item['ref']} was created, but {exc.format_message()}")
+            err.exit_code = exc.exit_code
+            raise err from exc
+    if effects and as_json:  # reflect links / custom values saved after the POST
+        item = resource.get_by_ref(client, pctx.id, item["ref"], slug)
+    emit(item, created=True)

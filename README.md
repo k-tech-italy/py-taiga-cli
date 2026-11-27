@@ -21,7 +21,7 @@ pretty-printed and exposes ~236 tools, `taiga-cli` is designed to keep that bill
 - **Names, not IDs:** statuses, users, sprints, types and priorities are resolved by name
   inside the CLI, so the agent makes no lookup calls (none at all with a
   [`.taiga-cli-config.json`](docs/user/project-config.md)).
-- **Quiet writes:** updates print `ok: web#42`; Taiga's optimistic locking is handled for you.
+- **Quiet writes:** creates print `created: web#45`, updates `ok: web#42`; Taiga's optimistic locking is handled for you.
 - **No tool catalogue in context:** the agent runs `taiga-cli` through its shell and loads a
   short [skill](docs/user/agents.md) only when needed.
 
