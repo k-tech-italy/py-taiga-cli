@@ -1,0 +1,13 @@
+.*
+~*
+
+!.gitignore
+!.*.example
+!.github/
+
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+site/
